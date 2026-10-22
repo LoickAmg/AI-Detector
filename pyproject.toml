@@ -1,0 +1,38 @@
+[project]
+name = "aidetect"
+version = "0.1.0"
+description = "Détecteur local de texte généré par IA (Binoculars + Fast-DetectGPT), par séquences sur documents longs"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.5",
+    "transformers>=4.56",
+    "numpy>=1.26",
+    "pypdf>=5.0",
+    "python-docx>=1.1",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "python-multipart>=0.0.12",
+    "huggingface-hub>=0.26",
+]
+
+[dependency-groups]
+calibration = ["datasets>=3.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+aidetect = "aidetect.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aidetect"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

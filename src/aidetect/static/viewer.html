@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Détecteur IA</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --surface: #ffffff; --ink: #1d1d1b; --muted: #6b6a65; --line: #e2e0d8;
+    --accent: #2f4ad0; --human: #2e8b57; --mid: #c98a12; --ai: #c8372d;
+    --hl-ai: rgba(200, 55, 45, .22); --hl-mid: rgba(201, 138, 18, .2); --hl-human: rgba(46, 139, 87, .1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151514; --surface: #1f1f1d; --ink: #ecebe6; --muted: #9a9890; --line: #33322f;
+      --accent: #8fa2ff; --human: #5cc48a; --mid: #e3aa3e; --ai: #ff7a6e;
+      --hl-ai: rgba(255, 122, 110, .25); --hl-mid: rgba(227, 170, 62, .22); --hl-human: rgba(92, 196, 138, .1);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 18px; }
+  textarea { width: 100%; min-height: 180px; resize: vertical; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 12px; font: inherit; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=file] { color: var(--muted); max-width: 100%; }
+  .progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 14px; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .stat .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .verdict { font-size: 20px; font-weight: 650; }
+  .warn { border-left: 3px solid var(--mid); padding: 8px 12px; background: var(--hl-mid); border-radius: 4px; font-size: 13px; margin-top: 12px; }
+  .strip { display: flex; height: 22px; border-radius: 5px; overflow: hidden; margin: 12px 0 4px; cursor: pointer; }
+  .strip > div { flex: 1; min-width: 1px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tablewrap { overflow-x: auto; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .text { white-space: pre-wrap; font-family: Georgia, "Times New Roman", serif; font-size: 16px; line-height: 1.7; max-height: 70vh; overflow-y: auto; }
+  .text span { border-radius: 3px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; }
+  .seqmark { display: block; font-family: system-ui, sans-serif; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Détecteur de texte généré par IA</h1>
+  <p class="sub">Analyse locale par séquences — Binoculars et Fast-DetectGPT. Le résultat est une probabilité, jamais une preuve.</p>
+
+  <section class="card" id="form">
+    <textarea id="input" placeholder="Collez un texte ici…"></textarea>
+    <div class="row">
+      <input type="file" id="file" accept=".pdf,.docx,.txt,.md">
+      <button id="go">Analyser</button>
+    </div>
+    <div class="progress" id="bar" hidden><div></div></div>
+    <p class="muted" id="status"></p>
+  </section>
+
+  <div id="result" hidden></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = (p) => Number.isFinite(p) ? Math.round(p * 100) + " %" : "—";
+const color = (p) => !Number.isFinite(p) ? "var(--line)" : p >= .6 ? "var(--ai)" : p > .4 ? "var(--mid)" : "var(--human)";
+const hl = (p) => !Number.isFinite(p) ? "transparent" : p >= .6 ? "var(--hl-ai)" : p > .4 ? "var(--hl-mid)" : "var(--hl-human)";
+
+function render(r) {
+  const g = r.global, s = r.synthese;
+  const mixed = s.sequences > 1 && s.sequences_ia > 0 && s.sequences_ia < s.sequences;
+  const strip = r.sequences.map((q) => `<div title="Séquence ${q.index}${q.page ? " · p. " + q.page : ""} · ${pct(q.probabilite_ia)}" data-seq="${q.index}" style="background:${color(q.probabilite_ia)}"></div>`).join("");
+  const rows = r.sequences.map((q) => `<tr>
+      <td class="num"><a href="#seq-${q.index}">${q.index}</a></td>
+      <td class="num">${q.page ?? "—"}</td>
+      <td class="num">${q.tokens}</td>
+      <td class="num">${pct(q.probabilite_ia)}</td>
+      <td><span class="pill" style="background:${color(q.probabilite_ia)}">${q.verdict}</span></td>
+      <td class="muted">${q.fiabilite}</td>
+      <td>${esc(r.texte.slice(q.debut, Math.min(q.fin, q.debut + 110)))}…</td></tr>`).join("");
+
+  const seqStart = new Map(r.sequences.map((q) => [q.phrases[0], q]));
+  let html = "", pos = 0;
+  r.phrases.forEach((ph, i) => {
+    html += esc(r.texte.slice(pos, ph.debut));
+    const q = seqStart.get(i);
+    if (q) html += `<span class="seqmark" id="seq-${q.index}">— Séquence ${q.index}${q.page ? " · page " + q.page : ""} · ${pct(q.probabilite_ia)}</span>`;
+    html += `<span style="background:${hl(ph.probabilite_ia)}" title="${pct(ph.probabilite_ia)}">${esc(r.texte.slice(ph.debut, ph.fin))}</span>`;
+    pos = ph.fin;
+  });
+  html += esc(r.texte.slice(pos));
+
+  $("#result").innerHTML = `
+    <section class="card">
+      <div class="muted">${esc(r.document)}${r.pages ? " · " + r.pages + " pages" : ""} · ${r.tokens.toLocaleString("fr-FR")} tokens</div>
+      <div class="verdict" style="color:${mixed && g.probabilite_ia < .6 ? "var(--mid)" : color(g.probabilite_ia)}">${g.verdict}</div>
+      <div class="grid" style="margin-top:14px">
+        <div class="stat"><div class="k">Probabilité IA (global)</div><div class="v">${pct(g.probabilite_ia)}</div></div>
+        <div class="stat"><div class="k">Part estimée IA</div><div class="v">${pct(s.part_ia_estimee)}</div></div>
+        <div class="stat"><div class="k">Séquences IA / total</div><div class="v">${s.sequences_ia} / ${s.sequences}</div></div>
+        <div class="stat"><div class="k">Fiabilité</div><div class="v" style="font-size:18px">${g.fiabilite}</div></div>
+      </div>
+      <div class="strip" id="strip">${strip}</div>
+      <div class="muted">Chaque bande = une séquence d'environ 300 tokens, dans l'ordre du document.</div>
+      ${mixed ? `<div class="warn">Document mixte : certaines séquences ressemblent à de l'IA, d'autres non. Fiez-vous au détail par séquence plutôt qu'au score global.</div>` : ""}
+      ${!r.calibre ? `<div class="warn">Seuils non calibrés pour ces modèles : lancez <code>aidetect calibrer</code> pour des probabilités fiables.</div>` : ""}
+      ${g.fiabilite === "très faible" || g.fiabilite === "faible" ? `<div class="warn">Texte court : la détection sous ~150 tokens (≈ 100 mots) est peu fiable.</div>` : ""}
+      <div class="muted" style="margin-top:10px">Binoculars ${g.binoculars?.toFixed(4) ?? "—"} (bas = IA) · Fast-DetectGPT ${g.fast_detectgpt?.toFixed(3) ?? "—"} · ${esc(r.modeles.observateur)} / ${esc(r.modeles.performeur)}</div>
+    </section>
+    <section class="card tablewrap">
+      <table><thead><tr><th>#</th><th>Page</th><th>Tokens</th><th>Proba.</th><th>Verdict</th><th>Fiabilité</th><th>Début</th></tr></thead><tbody>${rows}</tbody></table>
+    </section>
+    <section class="card">
+      <div class="legend"><span><i style="background:var(--hl-ai)"></i>IA probable</span><span><i style="background:var(--hl-mid)"></i>Indéterminé</span><span><i style="background:var(--hl-human)"></i>Humain probable</span><span>Survoler une phrase pour sa probabilité (fenêtre de phrases voisines)</span></div>
+      <div class="text">${html}</div>
+    </section>`;
+  $("#result").hidden = false;
+  $("#strip").addEventListener("click", (e) => {
+    const n = e.target.dataset.seq;
+    if (n) document.getElementById("seq-" + n)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+}
+
+async function analyse() {
+  const body = new FormData();
+  const f = $("#file").files[0];
+  if (f) body.append("fichier", f);
+  else if ($("#input").value.trim()) body.append("texte", $("#input").value);
+  else return;
+  $("#go").disabled = true; $("#bar").hidden = false; $("#bar > div").style.width = "0";
+  $("#status").textContent = "Envoi…";
+  try {
+    let res = await fetch("/api/analyses", { method: "POST", body });
+    let job = await res.json();
+    if (!res.ok) throw new Error(job.detail || "Erreur");
+    while (job.etat !== "termine") {
+      await new Promise((r) => setTimeout(r, 700));
+      job = await (await fetch("/api/analyses/" + job.id)).json();
+      if (job.etat === "erreur") throw new Error(job.erreur);
+      const done = job.total ? job.fait / job.total : 0;
+      $("#bar > div").style.width = Math.round(done * 100) + "%";
+      $("#status").textContent = job.etat === "chargement" ? "Chargement des modèles (première fois : téléchargement)…"
+        : job.total ? `Séquence ${job.fait} / ${job.total}` : "Préparation…";
+    }
+    $("#status").textContent = "";
+    render(job.resultat);
+  } catch (e) {
+    $("#status").textContent = "Erreur : " + e.message;
+  } finally {
+    $("#go").disabled = false; $("#bar").hidden = true;
+  }
+}
+
+if (window.__REPORT__) { $("#form").hidden = true; render(window.__REPORT__); }
+else $("#go").addEventListener("click", analyse);
+</script>
+</body>
+</html>
