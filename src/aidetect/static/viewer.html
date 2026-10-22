@@ -118,7 +118,7 @@ function render(r) {
       ${Object.keys(r.caracteres_suspects || {}).length ? `<div class="warn">Caractères inhabituels neutralisés avant l'analyse : ${Object.entries(r.caracteres_suspects).map(([k, v]) => v + " " + (SUSPECTS[k] || k)).join(", ")}. Ils servent souvent à tromper les détecteurs.</div>` : ""}
       ${!r.calibre ? `<div class="warn">Seuils non calibrés pour ces modèles : lancez <code>aidetect calibrer</code> pour des probabilités fiables.</div>` : ""}
       ${g.fiabilite === "très faible" || g.fiabilite === "faible" ? `<div class="warn">Texte court : la détection sous ~150 tokens (≈ 100 mots) est peu fiable.</div>` : ""}
-      <div class="muted" style="margin-top:10px">Binoculars ${g.binoculars?.toFixed(4) ?? "—"} (bas = IA) · Fast-DetectGPT ${g.fast_detectgpt?.toFixed(3) ?? "—"} · ${esc(r.modeles.observateur)} / ${esc(r.modeles.performeur)}</div>
+      <div class="muted" style="margin-top:10px">Binoculars ${g.binoculars?.toFixed(4) ?? "—"} (bas = IA) · Fast-DetectGPT ${g.fast_detectgpt?.toFixed(3) ?? "—"} · ${esc(r.modeles.observateur)} / ${esc(r.modeles.performeur)}${r.calibration_personnelle ? " · calibration personnalisée" : ""}</div>
     </section>
     <section class="card tablewrap">
       <table><thead><tr><th>#</th><th>Page</th><th>Tokens</th><th>Proba.</th><th>Verdict</th><th>Fiabilité</th><th>Début</th></tr></thead><tbody>${rows}</tbody></table>

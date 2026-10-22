@@ -50,13 +50,29 @@ uv run aidetect serveur                                        # interface web s
 
 Le rapport indique un verdict global avec son intervalle de confiance, la part estimée de texte IA, une bande par séquence (localisation dans le document, avec numéro de page pour les PDF) et le texte surligné phrase par phrase.
 
-## Calibrer sur vos propres textes
+## Évaluer et recalibrer sur vos propres textes
 
-Les probabilités dépendent de la paire de modèles et du type de textes. Pour un usage sérieux, recalibrez avec des textes dont l'origine est certaine :
+Les probabilités dépendent de la paire de modèles et du type de textes. Placez des textes dont l'origine est **certaine** dans `mes_textes/` (dossier exclu de Git) :
+
+```
+mes_textes/
+├── humain/              écrits par des humains, idéalement avant 2023 ou dont vous connaissez l'auteur
+│   ├── memoires/        sous-dossiers = catégories mesurées séparément (facultatif)
+│   └── non-natifs/      ex. : rédacteurs dont le français n'est pas la langue maternelle
+└── ia/                  entièrement générés par IA, sans retouche humaine
+    ├── chatgpt/
+    └── claude/
+```
+
+Formats : `.txt`, `.md`, `.pdf` (avec texte, pas scanné), `.docx`, de quelques paragraphes à des documents entiers. Visez au moins 20 documents par classe, et des sujets et longueurs comparables entre humain et IA. Les documents mixtes (en partie IA) faussent la mesure : laissez-les de côté.
 
 ```bash
-uv run aidetect calibrer --humain dossier_humain --ia dossier_ia
+uv run aidetect evaluer-perso --humain mes_textes/humain --ia mes_textes/ia
 ```
+
+La commande mesure la fiabilité par **validation croisée par document** (chaque texte est noté par une calibration qui ne l'a jamais vu). Elle compare la calibration actuelle à celles apprises sur vos textes, seuls ou avec le jeu de base, et écrit `mes_textes/rapport-perso-<preset>.md` : AUROC, faux positifs, rappel à 2 % de faux positifs, résultats par catégorie et documents les plus mal classés. Si une calibration apprise fait mieux, elle est enregistrée comme calibration personnelle, utilisée automatiquement ensuite (`--calibration defaut` pour l'ignorer). Les scores sont mis en cache : relancer après avoir ajouté des textes ne recalcule que les nouveaux.
+
+Pour une calibration directe sans évaluation : `uv run aidetect calibrer --humain dossier_humain --ia dossier_ia`.
 
 Le jeu de calibration par défaut se reconstruit avec `uv run --group calibration python scripts/build_calibration_set.py` : HC3 (humain vs ChatGPT, anglais), Wikipédia FR (novembre 2023) et des textes IA français de genres variés produits par **SmolLM3-3B**, un générateur volontairement d'une autre famille que les modèles de détection. Un détecteur note trop bien les textes de son propre modèle, ce qui fausse la calibration.
 

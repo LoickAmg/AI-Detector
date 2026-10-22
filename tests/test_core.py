@@ -88,6 +88,17 @@ def test_bootstrap_matches_point_estimate_on_constant_stats():
     assert tokens == 100 and np.allclose(bino, 0.5) and np.allclose(fdg, 1.0)
 
 
+def test_perso_folds_are_stratified_and_ece_is_zero_when_perfect():
+    from aidetect.perso import expected_calibration_error, folds
+
+    docs = [{"label": 0}] * 7 + [{"label": 1}] * 5
+    assign = folds(docs, 3)
+    for label in (0, 1):
+        counts = [sum(1 for d, f in zip(docs, assign) if d["label"] == label and f == k) for k in range(3)]
+        assert max(counts) - min(counts) <= 1
+    assert expected_calibration_error(np.array([0.0, 0.0, 1.0]), np.array([0, 0, 1])) == 0.0
+
+
 def test_auroc():
     assert auroc(np.array([0.1, 0.2, 0.8, 0.9]), np.array([0, 0, 1, 1])) == 1.0
 

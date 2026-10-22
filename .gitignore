@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 reports/
 data/
+mes_textes/
+src/aidetect/calibrations/perso-*.json

@@ -140,6 +140,7 @@ class Analyzer:
             "tokens": n,
             "modeles": {"observateur": self.detector.observer_name, "performeur": self.detector.performer_name},
             "calibre": self.calibration.calibrated,
+            "calibration_personnelle": self.calibration.personal,
             "seuil_prudent": self.calibration.threshold_1pct,
             "caracteres_suspects": dict(doc.suspects),
             "global": overall,

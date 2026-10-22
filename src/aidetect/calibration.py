@@ -35,6 +35,7 @@ class Calibration:
     metrics: dict = field(default_factory=dict)
     calibrated: bool = True
     variables: str = "bino+fdg"
+    personal: bool = False
 
     def probability(self, binoculars: float, fast_detectgpt: float, tokens: int) -> float:
         if tokens < 1 or math.isnan(binoculars):
@@ -75,13 +76,43 @@ def calibration_path(preset: str) -> Path:
     return CALIBRATION_DIR / f"{preset}.json"
 
 
-def load_calibration(preset: str, observer: str, performer: str, path: Path | None = None) -> Calibration:
-    path = path or calibration_path(preset)
-    if path.exists():
-        calib = Calibration.load(path)
-        if calib.observer == observer and calib.performer == performer:
-            return calib
+def personal_calibration_path(preset: str) -> Path:
+    return CALIBRATION_DIR / f"perso-{preset}.json"
+
+
+def load_calibration(preset: str, observer: str, performer: str, path: str | Path | None = None) -> Calibration:
+    """path: a file, "defaut" to ignore the personal calibration, or None (personal one first if present)."""
+    if path == "defaut":
+        candidates = [calibration_path(preset)]
+    elif path:
+        candidates = [Path(path)]
+    else:
+        candidates = [personal_calibration_path(preset), calibration_path(preset)]
+    for p in candidates:
+        if p.exists():
+            calib = Calibration.load(p)
+            if calib.observer == observer and calib.performer == performer:
+                calib.personal = p.name.startswith("perso-")
+                return calib
     return UncalibratedRule(observer, performer)
+
+
+WINDOW_LENGTHS = (40, 80, 150, 300, 600, 1200)
+
+
+def sample_windows(cum, meta: dict, rng, per_length: int = 3) -> list[dict]:
+    """Windows of several lengths so the calibration learns how confidence depends on length."""
+    n = len(cum.count) - 1
+    rows = []
+    for length in WINDOW_LENGTHS:
+        if n < length + 1:
+            continue
+        for _ in range(min(per_length, n // length)):
+            a = rng.randint(1, n - length)
+            rows.append({**cum.span(a, a + length), **meta})
+    if n >= 20:
+        rows.append({**cum.span(1, n), **meta, "complet": True})
+    return rows
 
 
 def fit_logistic(X: np.ndarray, y: np.ndarray, l2: float = 1e-2, iters: int = 50) -> tuple[np.ndarray, float]:
@@ -116,7 +147,7 @@ def fit_calibration(rows: list[dict], observer: str, performer: str, holdout: fl
     """rows: dicts with binoculars, fast_detectgpt, tokens, label (1 = IA), group (source text id)."""
     rng = np.random.default_rng(seed)
     groups = sorted({r["group"] for r in rows})
-    test_groups = set(rng.choice(groups, size=max(1, int(len(groups) * holdout)), replace=False).tolist())
+    test_groups = set(rng.choice(groups, size=int(len(groups) * holdout), replace=False).tolist()) if holdout else set()
 
     def matrix(sel):
         cols = [np.array([r[k] for r in sel], dtype=float) for k in ("binoculars", "fast_detectgpt", "tokens")]
@@ -128,6 +159,8 @@ def fit_calibration(rows: list[dict], observer: str, performer: str, holdout: fl
     mean, std = Xtr.mean(0), Xtr.std(0) + 1e-9
     w, b = fit_logistic((Xtr - mean) / std, ytr)
     calib = Calibration(observer, performer, mean.tolist(), std.tolist(), w.tolist(), b, variables=variables)
+    if not test:
+        return calib
 
     _, yte = matrix(test)
     p = calib.probabilities(*[np.array([r[k] for r in test], dtype=float) for k in ("binoculars", "fast_detectgpt", "tokens")])

@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 
 from .analyzer import Analyzer
+from .calibration import load_calibration
 from .engine import DEFAULT_PRESET, Detector
 from .readers import Document, read_document
 from .report import VIEWER, json_safe
@@ -19,7 +20,7 @@ MAX_UPLOAD = 50 * 1024 * 1024
 ALLOWED = {".pdf", ".docx", ".txt", ".md"}
 
 
-def create_app(preset: str = DEFAULT_PRESET) -> FastAPI:
+def create_app(preset: str = DEFAULT_PRESET, calibration: str | None = None) -> FastAPI:
     app = FastAPI(title="aidetect")
     jobs: dict[str, dict] = {}
     # One worker: the GPU runs one analysis at a time, others wait in the queue.
@@ -30,7 +31,8 @@ def create_app(preset: str = DEFAULT_PRESET) -> FastAPI:
     def analyzer() -> Analyzer:
         with lock:
             if "analyzer" not in state:
-                state["analyzer"] = Analyzer(Detector(preset))
+                det = Detector(preset)
+                state["analyzer"] = Analyzer(det, load_calibration(det.preset, det.observer_name, det.performer_name, calibration))
             return state["analyzer"]
 
     def run(job_id: str, doc: Document) -> None:

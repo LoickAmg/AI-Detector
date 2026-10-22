@@ -33,8 +33,13 @@ def cmd_analyser(args) -> None:
     if not doc.text:
         sys.exit("Aucun texte extractible (PDF scanné ?).")
 
+    from .calibration import load_calibration
+
     print(f"Chargement des modèles ({args.preset})…", file=sys.stderr)
-    analyzer = Analyzer(Detector(args.preset))
+    detector = Detector(args.preset)
+    analyzer = Analyzer(detector, load_calibration(detector.preset, detector.observer_name, detector.performer_name, args.calibration))
+    if analyzer.calibration.personal:
+        print("Calibration personnalisée utilisée (--calibration defaut pour l'ignorer).", file=sys.stderr)
     r = analyzer.analyze(doc, sequence_tokens=args.sequence, progress=_progress)
 
     g, s = r["global"], r["synthese"]
@@ -66,7 +71,20 @@ def cmd_serveur(args) -> None:
     from .server import create_app
 
     print(f"Interface : http://127.0.0.1:{args.port}", file=sys.stderr)
-    uvicorn.run(create_app(args.preset), host="127.0.0.1", port=args.port)
+    uvicorn.run(create_app(args.preset, args.calibration), host="127.0.0.1", port=args.port)
+
+
+def cmd_evaluer_perso(args) -> None:
+    from .engine import Detector
+    from .perso import run
+
+    humain, ia = Path(args.humain), Path(args.ia)
+    for folder in (humain, ia):
+        if not folder.is_dir():
+            sys.exit(f"Dossier introuvable : {folder}")
+    detector = Detector(args.preset)
+    out = Path(args.sortie) if args.sortie else humain.resolve().parent
+    run(humain, ia, detector, detector.preset, out, folds_k=args.plis, use_base=not args.sans_base, save=not args.sans_enregistrer)
 
 
 def _load_labeled(args) -> list[tuple[str, int, str, str]]:
@@ -89,7 +107,7 @@ def _load_labeled(args) -> list[tuple[str, int, str, str]]:
 def cmd_calibrer(args) -> None:
     import random
 
-    from .calibration import DEFAULT_VARIABLES, calibration_path, fit_calibration
+    from .calibration import DEFAULT_VARIABLES, calibration_path, fit_calibration, sample_windows
     from .engine import Detector
 
     if args.depuis_scores:
@@ -105,17 +123,7 @@ def cmd_calibrer(args) -> None:
         for k, (text, label, group, source) in enumerate(items):
             print(f"\r  texte {k + 1}/{len(items)}", end="", file=sys.stderr, flush=True)
             cum = detector.token_stats(text).cumulative()
-            n = len(cum.count) - 1
-            meta = {"label": label, "group": group, "source": source}
-            # Windows of several lengths so the calibration learns how confidence depends on length.
-            for length in (40, 80, 150, 300, 600):
-                if n < length + 1:
-                    continue
-                for _ in range(min(3, n // length)):
-                    a = rng.randint(1, n - length)
-                    rows.append({**cum.span(a, a + length), **meta})
-            if n >= 20:
-                rows.append({**cum.span(1, n), **meta, "complet": True})
+            rows += sample_windows(cum, {"label": label, "group": group, "source": source}, rng)
         print(file=sys.stderr)
         if args.scores:
             Path(args.scores).parent.mkdir(parents=True, exist_ok=True)
@@ -144,12 +152,24 @@ def main() -> None:
     p.add_argument("--json", help="Chemin de l'export JSON")
     p.add_argument("--sequence", type=int, default=300, help="Taille cible d'une séquence en tokens")
     p.add_argument("--preset", choices=PRESETS, default=DEFAULT_PRESET)
+    p.add_argument("--calibration", help="Fichier de calibration, ou « defaut » pour ignorer la calibration personnalisée")
     p.set_defaults(func=cmd_analyser)
 
     p = sub.add_parser("serveur", help="Lancer l'interface web locale")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--preset", choices=PRESETS, default=DEFAULT_PRESET)
+    p.add_argument("--calibration", help="Fichier de calibration, ou « defaut » pour ignorer la calibration personnalisée")
     p.set_defaults(func=cmd_serveur)
+
+    p = sub.add_parser("evaluer-perso", help="Mesurer la fiabilité sur vos textes et recalibrer (validation croisée)")
+    p.add_argument("--humain", required=True, help="Dossier de textes humains (sous-dossiers = catégories)")
+    p.add_argument("--ia", required=True, help="Dossier de textes entièrement générés par IA (sous-dossiers = catégories)")
+    p.add_argument("--preset", choices=PRESETS, default=DEFAULT_PRESET)
+    p.add_argument("--plis", type=int, default=5, help="Nombre de plis de validation croisée")
+    p.add_argument("--sans-base", action="store_true", help="Ne pas mélanger le jeu de calibration de base")
+    p.add_argument("--sans-enregistrer", action="store_true", help="Mesurer seulement, sans enregistrer de calibration")
+    p.add_argument("--sortie", help="Dossier du rapport (défaut : dossier parent de --humain)")
+    p.set_defaults(func=cmd_evaluer_perso)
 
     p = sub.add_parser("calibrer", help="Ajuster les probabilités sur des textes étiquetés")
     p.add_argument("--humain", help="Dossier de textes écrits par des humains")
