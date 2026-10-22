@@ -10,10 +10,17 @@ import numpy as np
 CALIBRATION_DIR = Path(__file__).parent / "calibrations"
 
 
-def features(binoculars: float, fast_detectgpt: float, tokens: int) -> list[float]:
+# "bino" alone generalizes better for the 3B pair: its Fast-DetectGPT weights, learned mostly on HC3 (English,
+# ChatGPT 2022), do not transfer to modern French text (held-out AUROC 0.976 vs 0.946).
+DEFAULT_VARIABLES = {"precis": "bino"}
+
+
+def feature_matrix(binoculars: np.ndarray, fast_detectgpt: np.ndarray, tokens: np.ndarray, variables: str = "bino+fdg") -> np.ndarray:
     # Interactions with log-length let confidence grow with the amount of text.
-    ln = math.log(max(tokens, 2))
-    return [binoculars, fast_detectgpt, binoculars * ln, fast_detectgpt * ln, ln]
+    ln = np.log(np.maximum(tokens, 2))
+    if variables == "bino":
+        return np.stack([binoculars, binoculars * ln, ln], axis=1)
+    return np.stack([binoculars, fast_detectgpt, binoculars * ln, fast_detectgpt * ln, ln], axis=1)
 
 
 @dataclass
@@ -27,12 +34,17 @@ class Calibration:
     threshold_1pct: float | None = None
     metrics: dict = field(default_factory=dict)
     calibrated: bool = True
+    variables: str = "bino+fdg"
 
     def probability(self, binoculars: float, fast_detectgpt: float, tokens: int) -> float:
         if tokens < 1 or math.isnan(binoculars):
             return float("nan")
-        z = (np.array(features(binoculars, fast_detectgpt, tokens)) - self.mean) / self.std
-        return float(1 / (1 + math.exp(-(float(np.dot(z, self.weights)) + self.bias))))
+        return float(self.probabilities(np.array([binoculars]), np.array([fast_detectgpt]), tokens)[0])
+
+    def probabilities(self, binoculars: np.ndarray, fast_detectgpt: np.ndarray, tokens) -> np.ndarray:
+        tokens = np.broadcast_to(np.asarray(tokens, dtype=float), np.shape(binoculars))
+        z = (feature_matrix(binoculars, fast_detectgpt, tokens, self.variables) - np.array(self.mean)) / np.array(self.std)
+        return 1 / (1 + np.exp(-(z @ np.array(self.weights) + self.bias)))
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,8 +64,11 @@ class UncalibratedRule(Calibration):
     def probability(self, binoculars: float, fast_detectgpt: float, tokens: int) -> float:
         if tokens < 1 or math.isnan(binoculars):
             return float("nan")
-        scale = 0.04 * math.sqrt(256 / max(tokens, 16))
-        return 1 / (1 + math.exp((binoculars - 0.90) / scale))
+        return float(self.probabilities(np.array([binoculars]), np.array([fast_detectgpt]), tokens)[0])
+
+    def probabilities(self, binoculars: np.ndarray, fast_detectgpt: np.ndarray, tokens) -> np.ndarray:
+        scale = 0.04 * np.sqrt(256 / np.maximum(tokens, 16))
+        return 1 / (1 + np.exp((binoculars - 0.90) / scale))
 
 
 def calibration_path(preset: str) -> Path:
@@ -97,26 +112,25 @@ def auroc(scores: np.ndarray, labels: np.ndarray) -> float:
     return float((ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
 
 
-def fit_calibration(rows: list[dict], observer: str, performer: str, holdout: float = 0.25, seed: int = 0) -> Calibration:
+def fit_calibration(rows: list[dict], observer: str, performer: str, holdout: float = 0.25, seed: int = 0, variables: str = "bino+fdg") -> Calibration:
     """rows: dicts with binoculars, fast_detectgpt, tokens, label (1 = IA), group (source text id)."""
     rng = np.random.default_rng(seed)
     groups = sorted({r["group"] for r in rows})
     test_groups = set(rng.choice(groups, size=max(1, int(len(groups) * holdout)), replace=False).tolist())
 
     def matrix(sel):
-        X = np.array([features(r["binoculars"], r["fast_detectgpt"], r["tokens"]) for r in sel])
-        y = np.array([r["label"] for r in sel], dtype=float)
-        return X, y
+        cols = [np.array([r[k] for r in sel], dtype=float) for k in ("binoculars", "fast_detectgpt", "tokens")]
+        return feature_matrix(*cols, variables), np.array([r["label"] for r in sel], dtype=float)
 
     train = [r for r in rows if r["group"] not in test_groups]
     test = [r for r in rows if r["group"] in test_groups]
     Xtr, ytr = matrix(train)
     mean, std = Xtr.mean(0), Xtr.std(0) + 1e-9
     w, b = fit_logistic((Xtr - mean) / std, ytr)
-    calib = Calibration(observer, performer, mean.tolist(), std.tolist(), w.tolist(), b)
+    calib = Calibration(observer, performer, mean.tolist(), std.tolist(), w.tolist(), b, variables=variables)
 
-    Xte, yte = matrix(test)
-    p = np.array([calib.probability(r["binoculars"], r["fast_detectgpt"], r["tokens"]) for r in test])
+    _, yte = matrix(test)
+    p = calib.probabilities(*[np.array([r[k] for r in test], dtype=float) for k in ("binoculars", "fast_detectgpt", "tokens")])
     human_p = np.sort(p[yte == 0])
     thr = float(human_p[int(math.ceil(0.99 * len(human_p))) - 1]) if len(human_p) else 0.5
     calib.threshold_1pct = thr

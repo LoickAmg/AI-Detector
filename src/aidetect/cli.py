@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from .engine import PRESETS
+from .engine import DEFAULT_PRESET, PRESETS
 
 
 def _pct(p) -> str:
@@ -39,7 +39,11 @@ def cmd_analyser(args) -> None:
 
     g, s = r["global"], r["synthese"]
     print(f"\n{r['document']} — {r['tokens']} tokens" + (f", {r['pages']} pages" if r["pages"] else ""))
-    print(f"Verdict global : {g['verdict']}  ({_pct(g['probabilite_ia']).strip()}, fiabilité {g['fiabilite']})")
+    ic = g.get("intervalle_90")
+    ic_txt = f", IC 90 % {ic[0] * 100:.0f}–{ic[1] * 100:.0f} %" if ic else ""
+    print(f"Verdict global : {g['verdict']}  ({_pct(g['probabilite_ia']).strip()}{ic_txt}, fiabilité {g['fiabilite']})")
+    if r["caracteres_suspects"]:
+        print(f"Caractères inhabituels neutralisés : {r['caracteres_suspects']}")
     print(f"Part estimée IA : {_pct(s['part_ia_estimee']).strip()} — {s['sequences_ia']}/{s['sequences']} séquences IA")
     if not r["calibre"]:
         print("Attention : seuils non calibrés pour ces modèles (aidetect calibrer).")
@@ -85,7 +89,7 @@ def _load_labeled(args) -> list[tuple[str, int, str, str]]:
 def cmd_calibrer(args) -> None:
     import random
 
-    from .calibration import calibration_path, fit_calibration
+    from .calibration import DEFAULT_VARIABLES, calibration_path, fit_calibration
     from .engine import Detector
 
     if args.depuis_scores:
@@ -119,7 +123,8 @@ def cmd_calibrer(args) -> None:
     observer, performer = PRESETS[args.preset]
     if detector is not None:
         observer, performer = detector.observer_name, detector.performer_name
-    calib = fit_calibration(rows, observer, performer)
+    variables = args.variables or DEFAULT_VARIABLES.get(args.preset, "bino+fdg")
+    calib = fit_calibration(rows, observer, performer, variables=variables)
     out = Path(args.sortie) if args.sortie else calibration_path(args.preset)
     calib.save(out)
     print(json.dumps(calib.metrics, indent=2, ensure_ascii=False))
@@ -138,12 +143,12 @@ def main() -> None:
     p.add_argument("--rapport", help="Chemin du rapport HTML")
     p.add_argument("--json", help="Chemin de l'export JSON")
     p.add_argument("--sequence", type=int, default=300, help="Taille cible d'une séquence en tokens")
-    p.add_argument("--preset", choices=PRESETS, default="standard")
+    p.add_argument("--preset", choices=PRESETS, default=DEFAULT_PRESET)
     p.set_defaults(func=cmd_analyser)
 
     p = sub.add_parser("serveur", help="Lancer l'interface web locale")
     p.add_argument("--port", type=int, default=8765)
-    p.add_argument("--preset", choices=PRESETS, default="standard")
+    p.add_argument("--preset", choices=PRESETS, default=DEFAULT_PRESET)
     p.set_defaults(func=cmd_serveur)
 
     p = sub.add_parser("calibrer", help="Ajuster les probabilités sur des textes étiquetés")
@@ -152,8 +157,9 @@ def main() -> None:
     p.add_argument("--jsonl", help='Fichier JSONL : {"text": ..., "label": 0|1, "group": ...}')
     p.add_argument("--scores", help="Enregistrer les scores bruts (JSONL) pour réutilisation")
     p.add_argument("--depuis-scores", help="Recalibrer depuis des scores bruts déjà calculés")
+    p.add_argument("--variables", choices=["bino+fdg", "bino"], help="Variables du modèle de calibration (défaut selon le preset)")
     p.add_argument("--sortie")
-    p.add_argument("--preset", choices=PRESETS, default="standard")
+    p.add_argument("--preset", choices=PRESETS, default=DEFAULT_PRESET)
     p.set_defaults(func=cmd_calibrer)
 
     args = parser.parse_args()

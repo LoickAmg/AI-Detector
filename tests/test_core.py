@@ -4,7 +4,25 @@ import numpy as np
 
 from aidetect.calibration import Calibration, auroc, fit_calibration
 from aidetect.engine import TokenStats, plan_segments
-from aidetect.readers import Document, clean_extracted, sentence_spans
+from aidetect.readers import Document, clean_extracted, normalize_text, sentence_spans
+
+
+def test_normalize_removes_evasion_characters_but_keeps_french():
+    sneaky = "Le té​létravail est utilе : « ok… » сhez 𝐦𝐨𝐢 ﬁn x²"  # 'е' and 'с' are Cyrillic
+    text, found = normalize_text(sneaky)
+    assert text == "Le télétravail est utile : « ok… » chez moi fin x²"
+    assert found == {"caracteres_invisibles": 1, "homoglyphes": 2, "caracteres_stylises": 4}
+
+
+def test_normalize_leaves_real_cyrillic_alone():
+    text, found = normalize_text("Привет, мир")
+    assert text == "Привет, мир" and not found
+
+
+def test_document_normalization_is_idempotent_for_page_offsets():
+    clean, _ = normalize_text("page un​")
+    doc = Document(clean + "\n\npage deux", pages=[(0, 1), (len(clean) + 2, 2)])
+    assert doc.text[doc.pages[1][0]:] == "page deux"
 
 
 def test_plan_segments_cuts_at_boundaries_and_covers_everything():
@@ -56,6 +74,20 @@ def test_span_scores_from_token_stats():
     assert math.isclose(s["fast_detectgpt"], 1.0)
 
 
+def test_bootstrap_matches_point_estimate_on_constant_stats():
+    n = 101
+    st = TokenStats(
+        ll_performer=np.r_[np.nan, np.full(n - 1, -2.0)],
+        cross_entropy=np.r_[np.nan, np.full(n - 1, 4.0)],
+        ll_observer=np.r_[np.nan, np.full(n - 1, -1.0)],
+        ref_mean=np.r_[np.nan, np.full(n - 1, -3.0)],
+        ref_var=np.r_[np.nan, np.full(n - 1, 4.0)],
+        offsets=[(i, i + 1) for i in range(n)],
+    )
+    bino, fdg, tokens = st.cumulative().bootstrap(1, n)
+    assert tokens == 100 and np.allclose(bino, 0.5) and np.allclose(fdg, 1.0)
+
+
 def test_auroc():
     assert auroc(np.array([0.1, 0.2, 0.8, 0.9]), np.array([0, 0, 1, 1])) == 1.0
 
@@ -78,3 +110,7 @@ def test_fit_calibration_separates_synthetic_data(tmp_path):
     assert calib.probability(1.02, 0.1, 300) < 0.1
     calib.save(tmp_path / "c.json")
     assert Calibration.load(tmp_path / "c.json").probability(0.78, 1.6, 300) > 0.9
+
+    bino_only = fit_calibration(rows, "obs", "perf", variables="bino")
+    assert bino_only.variables == "bino" and len(bino_only.weights) == 3
+    assert bino_only.probability(0.78, 99.0, 300) > 0.9 and bino_only.probability(1.02, -99.0, 300) < 0.1

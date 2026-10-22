@@ -1,0 +1,56 @@
+{
+  "observer": "Qwen/Qwen2.5-3B",
+  "performer": "Qwen/Qwen2.5-3B-Instruct",
+  "mean": [
+    0.9129258174766778,
+    4.10079628707978,
+    4.493292340574709
+  ],
+  "std": [
+    0.15838843206725894,
+    0.9637047718822523,
+    0.7564851288811217
+  ],
+  "weights": [
+    6.178875665160189,
+    -11.373002344890374,
+    8.074905749523095
+  ],
+  "bias": 0.15714156636769852,
+  "threshold_1pct": 0.882932537167178,
+  "metrics": {
+    "train": 5030,
+    "test": 1714,
+    "auroc": 0.8361818301067981,
+    "0-100 tokens": {
+      "n": 1080,
+      "auroc": 0.769,
+      "exactitude@0.5": 0.7046,
+      "faux_positifs@0.5": 0.3088,
+      "detection@seuil_1pct": 0.1063
+    },
+    "100-200 tokens": {
+      "n": 359,
+      "auroc": 0.879,
+      "exactitude@0.5": 0.8078,
+      "faux_positifs@0.5": 0.1641,
+      "detection@seuil_1pct": 0.4207
+    },
+    "200-400 tokens": {
+      "n": 198,
+      "auroc": 0.9451,
+      "exactitude@0.5": 0.8586,
+      "faux_positifs@0.5": 0.0734,
+      "detection@seuil_1pct": 0.5506
+    },
+    "400-+ tokens": {
+      "n": 77,
+      "auroc": 1.0,
+      "exactitude@0.5": 1.0,
+      "faux_positifs@0.5": 0.0,
+      "detection@seuil_1pct": 0.8824
+    }
+  },
+  "calibrated": true,
+  "variables": "bino"
+}

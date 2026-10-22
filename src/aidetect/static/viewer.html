@@ -73,6 +73,8 @@
 const $ = (s) => document.querySelector(s);
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pct = (p) => Number.isFinite(p) ? Math.round(p * 100) + " %" : "—";
+const ic = (q) => q.intervalle_90 ? `${Math.round(q.intervalle_90[0] * 100)}–${Math.round(q.intervalle_90[1] * 100)} %` : "";
+const SUSPECTS = { caracteres_invisibles: "caractères invisibles", homoglyphes: "homoglyphes (lettres cyrilliques/grecques déguisées)", caracteres_stylises: "caractères stylisés" };
 const color = (p) => !Number.isFinite(p) ? "var(--line)" : p >= .6 ? "var(--ai)" : p > .4 ? "var(--mid)" : "var(--human)";
 const hl = (p) => !Number.isFinite(p) ? "transparent" : p >= .6 ? "var(--hl-ai)" : p > .4 ? "var(--hl-mid)" : "var(--hl-human)";
 
@@ -84,7 +86,7 @@ function render(r) {
       <td class="num"><a href="#seq-${q.index}">${q.index}</a></td>
       <td class="num">${q.page ?? "—"}</td>
       <td class="num">${q.tokens}</td>
-      <td class="num">${pct(q.probabilite_ia)}</td>
+      <td class="num">${pct(q.probabilite_ia)}<div class="muted">${ic(q)}</div></td>
       <td><span class="pill" style="background:${color(q.probabilite_ia)}">${q.verdict}</span></td>
       <td class="muted">${q.fiabilite}</td>
       <td>${esc(r.texte.slice(q.debut, Math.min(q.fin, q.debut + 110)))}…</td></tr>`).join("");
@@ -105,7 +107,7 @@ function render(r) {
       <div class="muted">${esc(r.document)}${r.pages ? " · " + r.pages + " pages" : ""} · ${r.tokens.toLocaleString("fr-FR")} tokens</div>
       <div class="verdict" style="color:${mixed && g.probabilite_ia < .6 ? "var(--mid)" : color(g.probabilite_ia)}">${g.verdict}</div>
       <div class="grid" style="margin-top:14px">
-        <div class="stat"><div class="k">Probabilité IA (global)</div><div class="v">${pct(g.probabilite_ia)}</div></div>
+        <div class="stat"><div class="k">Probabilité IA (document entier)</div><div class="v">${pct(g.probabilite_ia)}</div>${ic(g) ? `<div class="muted">IC 90 % : ${ic(g)}</div>` : ""}</div>
         <div class="stat"><div class="k">Part estimée IA</div><div class="v">${pct(s.part_ia_estimee)}</div></div>
         <div class="stat"><div class="k">Séquences IA / total</div><div class="v">${s.sequences_ia} / ${s.sequences}</div></div>
         <div class="stat"><div class="k">Fiabilité</div><div class="v" style="font-size:18px">${g.fiabilite}</div></div>
@@ -113,6 +115,7 @@ function render(r) {
       <div class="strip" id="strip">${strip}</div>
       <div class="muted">Chaque bande = une séquence d'environ 300 tokens, dans l'ordre du document.</div>
       ${mixed ? `<div class="warn">Document mixte : certaines séquences ressemblent à de l'IA, d'autres non. Fiez-vous au détail par séquence plutôt qu'au score global.</div>` : ""}
+      ${Object.keys(r.caracteres_suspects || {}).length ? `<div class="warn">Caractères inhabituels neutralisés avant l'analyse : ${Object.entries(r.caracteres_suspects).map(([k, v]) => v + " " + (SUSPECTS[k] || k)).join(", ")}. Ils servent souvent à tromper les détecteurs.</div>` : ""}
       ${!r.calibre ? `<div class="warn">Seuils non calibrés pour ces modèles : lancez <code>aidetect calibrer</code> pour des probabilités fiables.</div>` : ""}
       ${g.fiabilite === "très faible" || g.fiabilite === "faible" ? `<div class="warn">Texte court : la détection sous ~150 tokens (≈ 100 mots) est peu fiable.</div>` : ""}
       <div class="muted" style="margin-top:10px">Binoculars ${g.binoculars?.toFixed(4) ?? "—"} (bas = IA) · Fast-DetectGPT ${g.fast_detectgpt?.toFixed(3) ?? "—"} · ${esc(r.modeles.observateur)} / ${esc(r.modeles.performeur)}</div>

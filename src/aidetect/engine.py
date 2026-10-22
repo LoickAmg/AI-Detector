@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Callable
 
@@ -11,7 +12,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 PRESETS: dict[str, tuple[str, str]] = {
     "standard": ("Qwen/Qwen2.5-1.5B", "Qwen/Qwen2.5-1.5B-Instruct"),
     "rapide": ("Qwen/Qwen2.5-0.5B", "Qwen/Qwen2.5-0.5B-Instruct"),
+    "precis": ("Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct"),
 }
+# Best measured accuracy on held-out French data (see docs/evaluation.md); needs CUDA for 4-bit loading.
+DEFAULT_PRESET = "precis"
+# Two 3B models do not fit in 8 GB of VRAM in bf16. NF4 4-bit: 5 GB, ~2x slower than the 1.5B pair;
+# 8-bit (LLM.int8) saturates 8 GB and is several times slower still.
+QUANTIZED = {"precis": "4bit"}
 
 
 @dataclass
@@ -32,6 +39,12 @@ class TokenStats:
         return CumStats(self)
 
 
+# Per-token surprisal cap (nats): a typo yields a few absurdly unlikely tokens that would otherwise
+# dominate the perplexity and make any text look human. 12 nats measured best: typo recall 17 % -> 42 %
+# for -0.004 AUROC on clean French; lower caps start hurting clean text.
+SURPRISAL_CAP = 12.0
+
+
 class CumStats:
     """Prefix sums so any token span [a, b) is scored in O(1)."""
 
@@ -40,7 +53,7 @@ class CumStats:
             x = np.nan_to_num(x.astype(np.float64), nan=0.0)
             return np.concatenate([[0.0], np.cumsum(x)])
 
-        self.neg_ll = cum(-stats.ll_performer)
+        self.neg_ll = cum(np.minimum(-stats.ll_performer, SURPRISAL_CAP))
         self.xent = cum(stats.cross_entropy)
         self.ll_obs = cum(stats.ll_observer)
         self.mean = cum(stats.ref_mean)
@@ -49,6 +62,20 @@ class CumStats:
         if len(valid):
             valid[0] = 0.0
         self.count = np.concatenate([[0.0], np.cumsum(valid)])
+
+    def bootstrap(self, a: int, b: int, rounds: int = 200, block: int = 16, seed: int = 0) -> tuple[np.ndarray, np.ndarray, int]:
+        """Binoculars / Fast-DetectGPT recomputed on token blocks resampled with replacement."""
+        edges = np.unique(np.r_[np.arange(a, b, block), b])
+        if len(edges) < 3:
+            return np.array([]), np.array([]), 0
+        parts = [self.neg_ll, self.xent, self.ll_obs, self.mean, self.var, self.count]
+        blocks = np.stack([np.diff(p[edges]) for p in parts], axis=1)
+        idx = np.random.default_rng(seed).integers(0, len(blocks), size=(rounds, len(blocks)))
+        s = blocks[idx].sum(axis=1)
+        n = np.maximum(s[:, 5], 1)
+        bino = s[:, 0] / np.maximum(s[:, 1], 1e-9)
+        fdg = (s[:, 2] - s[:, 3]) / np.sqrt(np.maximum(s[:, 4], 1e-9)) / np.sqrt(n)
+        return bino, fdg, int(self.count[b] - self.count[a])
 
     def span(self, a: int, b: int) -> dict[str, float]:
         n = self.count[b] - self.count[a]
@@ -65,18 +92,22 @@ class CumStats:
 class Detector:
     def __init__(
         self,
-        preset: str = "standard",
+        preset: str = DEFAULT_PRESET,
         observer: str | None = None,
         performer: str | None = None,
         device: str | None = None,
         segment_tokens: int = 384,
-        context_tokens: int = 128,
+        context_tokens: int = 256,
+        quantization: str | None = None,
     ):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if preset in QUANTIZED and self.device != "cuda":
+            print(f"Preset « {preset} » : GPU CUDA requis, repli sur « standard ».", file=sys.stderr)
+            preset = "standard"
         obs_name, perf_name = PRESETS[preset]
         self.preset = preset if observer is None and performer is None else "custom"
         self.observer_name = observer or obs_name
         self.performer_name = performer or perf_name
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
         self.segment_tokens = segment_tokens
         self.context_tokens = context_tokens
@@ -85,8 +116,19 @@ class Detector:
         perf_tok = AutoTokenizer.from_pretrained(self.performer_name)
         if perf_tok.get_vocab() != self.tokenizer.get_vocab():
             raise ValueError("L'observateur et le performeur doivent partager le même tokenizer.")
-        self.observer = AutoModelForCausalLM.from_pretrained(self.observer_name, dtype=dtype).to(self.device).eval()
-        self.performer = AutoModelForCausalLM.from_pretrained(self.performer_name, dtype=dtype).to(self.device).eval()
+        self.quantization = quantization or QUANTIZED.get(preset)
+        if self.quantization and self.device == "cuda":
+            from transformers import BitsAndBytesConfig
+
+            if self.quantization == "8bit":
+                quant = BitsAndBytesConfig(load_in_8bit=True)
+            else:
+                quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.bfloat16)
+            load = lambda name: AutoModelForCausalLM.from_pretrained(name, quantization_config=quant, device_map={"": 0})
+        else:
+            load = lambda name: AutoModelForCausalLM.from_pretrained(name, dtype=dtype).to(self.device)
+        self.observer = load(self.observer_name).eval()
+        self.performer = load(self.performer_name).eval()
 
     def tokenize(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
         enc = self.tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)

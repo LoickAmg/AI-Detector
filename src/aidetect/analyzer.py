@@ -4,6 +4,8 @@ import bisect
 import math
 from typing import Callable
 
+import numpy as np
+
 from .calibration import Calibration, load_calibration
 from .engine import Detector
 from .readers import Document, sentence_spans
@@ -19,9 +21,15 @@ def reliability(tokens: int) -> str:
     return "bonne"
 
 
-def verdict(p: float) -> str:
-    if math.isnan(p):
-        return "Texte trop court"
+MIN_TOKENS = 60
+
+
+def verdict(p: float, tokens: int = MIN_TOKENS, interval: tuple[float, float] | None = None) -> str:
+    if math.isnan(p) or tokens < MIN_TOKENS:
+        return "Indéterminé — texte trop court"
+    # Abstain when the uncertainty spans both sides rather than pick one.
+    if interval and interval[0] < 0.3 and interval[1] > 0.7:
+        return "Indéterminé"
     if p >= 0.85:
         return "Très probablement IA"
     if p >= 0.6:
@@ -38,10 +46,22 @@ class Analyzer:
         self.detector = detector
         self.calibration = calibration or load_calibration(detector.preset, detector.observer_name, detector.performer_name)
 
-    def _score(self, cum, a: int, b: int) -> dict:
+    def _score(self, cum, a: int, b: int, with_interval: bool = True) -> dict:
         s = cum.span(a, b)
         p = self.calibration.probability(s["binoculars"], s["fast_detectgpt"], s["tokens"])
-        return {**s, "probabilite_ia": p, "verdict": verdict(p), "fiabilite": reliability(s["tokens"])}
+        interval = None
+        if with_interval:
+            bino, fdg, n = cum.bootstrap(a, b)
+            if len(bino):
+                probs = self.calibration.probabilities(bino, fdg, n)
+                interval = (float(np.percentile(probs, 5)), float(np.percentile(probs, 95)))
+        return {
+            **s,
+            "probabilite_ia": p,
+            "intervalle_90": interval,
+            "verdict": verdict(p, s["tokens"], interval),
+            "fiabilite": reliability(s["tokens"]),
+        }
 
     def analyze(
         self,
@@ -102,7 +122,7 @@ class Analyzer:
                     lo -= 1
                 else:
                     hi += 1
-            s = self._score(cum, sent_tokens[lo][0], sent_tokens[hi][1])
+            s = self._score(cum, sent_tokens[lo][0], sent_tokens[hi][1], with_interval=False)
             sent_out.append({"debut": sents[i][0], "fin": sents[i][1], "probabilite_ia": s["probabilite_ia"], "tokens_propres": t1 - t0})
 
         overall = self._score(cum, 0, n)
@@ -120,6 +140,8 @@ class Analyzer:
             "tokens": n,
             "modeles": {"observateur": self.detector.observer_name, "performeur": self.detector.performer_name},
             "calibre": self.calibration.calibrated,
+            "seuil_prudent": self.calibration.threshold_1pct,
+            "caracteres_suspects": dict(doc.suspects),
             "global": overall,
             "synthese": {
                 "probabilite_moyenne": sum(p * t for p, t in weighted) / total if weighted else float("nan"),
